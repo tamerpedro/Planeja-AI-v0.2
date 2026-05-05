@@ -1,5 +1,6 @@
 import streamlit as st
 from openai import OpenAI
+from openai import RateLimitError, AuthenticationError, BadRequestError, APIStatusError
 from pathlib import Path
 
 
@@ -74,17 +75,48 @@ Quando faltar informação, use marcadores como <<preencher>>.
 """
 
     with st.spinner("Gerando resposta..."):
-        resposta = client.responses.create(
-            model=st.secrets.get("OPENAI_MODEL", "gpt-5.5"),
-            input=prompt_final,
-        )
+        try:
+            modelo = st.secrets.get("OPENAI_MODEL", "gpt-5.4-mini")
+
+            resposta = client.responses.create(
+                model=modelo,
+                input=prompt_final,
+                max_output_tokens=1200,
+            )
+
+            texto_resposta = resposta.output_text
+
+        except RateLimitError as erro:
+            st.error("Erro de limite/quota na OpenAI API.")
+            st.code(str(erro))
+            st.stop()
+
+        except AuthenticationError as erro:
+            st.error("Erro de autenticação. Verifique a OPENAI_API_KEY nos Secrets do Streamlit.")
+            st.code(str(erro))
+            st.stop()
+
+        except BadRequestError as erro:
+            st.error("Requisição inválida. Verifique se o modelo configurado existe e está disponível.")
+            st.code(str(erro))
+            st.stop()
+
+        except APIStatusError as erro:
+            st.error("Erro retornado pela OpenAI API.")
+            st.code(str(erro))
+            st.stop()
+
+        except Exception as erro:
+            st.error("Erro inesperado ao chamar a OpenAI API.")
+            st.code(str(erro))
+            st.stop()
 
     st.subheader("Resposta gerada")
-    st.markdown(resposta.output_text)
+    st.markdown(texto_resposta)
 
     st.download_button(
         label="Baixar resposta em Markdown",
-        data=resposta.output_text,
+        data=texto_resposta,
         file_name="resposta_dod.md",
         mime="text/markdown",
     )
