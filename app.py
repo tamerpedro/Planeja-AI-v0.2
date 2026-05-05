@@ -2,6 +2,9 @@ import streamlit as st
 from openai import OpenAI
 from openai import RateLimitError, AuthenticationError, BadRequestError, APIStatusError
 from pathlib import Path
+from datetime import datetime
+from zoneinfo import ZoneInfo
+from importlib.metadata import version, PackageNotFoundError
 
 
 st.set_page_config(
@@ -41,21 +44,27 @@ def obter_secret_texto(nome: str, obrigatorio: bool = False) -> str:
 
 
 def obter_cliente_openai() -> OpenAI:
+    """
+    Usa apenas a project-scoped key sk-proj-...
+    Não define organization/OPENAI_ORG_ID, conforme orientação do suporte da OpenAI.
+    """
     api_key = obter_secret_texto("OPENAI_API_KEY", obrigatorio=True)
-    org_id = obter_secret_texto("OPENAI_ORG_ID", obrigatorio=False)
-
-    client_kwargs = {
-        "api_key": api_key,
-    }
-
-    if org_id:
-        client_kwargs["organization"] = org_id
-
-    return OpenAI(**client_kwargs)
+    return OpenAI(api_key=api_key)
 
 
 def obter_modelo() -> str:
     return obter_secret_texto("OPENAI_MODEL", obrigatorio=False) or "gpt-5.4-mini"
+
+
+def obter_versao_openai_sdk() -> str:
+    try:
+        return version("openai")
+    except PackageNotFoundError:
+        return "não identificada"
+
+
+def obter_timestamp_brasilia() -> str:
+    return datetime.now(ZoneInfo("America/Sao_Paulo")).isoformat()
 
 
 def extrair_request_id(erro: Exception) -> str:
@@ -78,11 +87,18 @@ def extrair_request_id(erro: Exception) -> str:
 def mostrar_erro_openai(titulo: str, erro: Exception) -> None:
     request_id = extrair_request_id(erro)
     status_code = getattr(erro, "status_code", None)
+    timestamp = obter_timestamp_brasilia()
+    sdk_version = obter_versao_openai_sdk()
 
     st.error(titulo)
 
+    st.write(f"**Timestamp:** `{timestamp}`")
+    st.write(f"**Timezone:** `America/Sao_Paulo`")
+    st.write(f"**OpenAI Python SDK:** `{sdk_version}`")
+    st.write("**Endpoint:** `Responses API - client.responses.create`")
+
     if status_code:
-        st.write(f"**Status code:** {status_code}")
+        st.write(f"**Status code:** `{status_code}`")
 
     if request_id:
         st.write(f"**x-request-id:** `{request_id}`")
@@ -93,9 +109,10 @@ def mostrar_erro_openai(titulo: str, erro: Exception) -> None:
     if "billing_not_active" in str(erro) or "Your account is not active" in str(erro):
         st.warning(
             "A OpenAI API retornou billing_not_active. "
-            "Isso geralmente indica que a organização usada na chamada ainda está marcada como inativa "
-            "ou que há divergência entre a organização da API key e a organização com billing ativo. "
-            "Confirme se OPENAI_ORG_ID está configurado com o Org ID correto em Secrets."
+            "Como esta aplicação usa uma project-scoped key sk-proj-..., "
+            "não está sendo enviado OPENAI_ORG_ID nem OpenAI-Organization. "
+            "Se o erro persistir, envie ao suporte da OpenAI o x-request-id, "
+            "o timestamp, a versão do SDK e o endpoint exibidos acima."
         )
 
     st.stop()
@@ -107,16 +124,22 @@ with st.expander("Ver contexto carregado do repositório"):
     st.markdown(contexto if contexto else "Nenhum contexto encontrado.")
 
 with st.expander("Diagnóstico da configuração da OpenAI"):
-    org_id_configurado = obter_secret_texto("OPENAI_ORG_ID", obrigatorio=False)
     modelo_configurado = obter_modelo()
+    sdk_version = obter_versao_openai_sdk()
 
-    st.write("**OPENAI_API_KEY:**", "configurada" if st.secrets.get("OPENAI_API_KEY") else "não configurada")
-    st.write("**OPENAI_ORG_ID:**", org_id_configurado if org_id_configurado else "não configurada")
+    st.write(
+        "**OPENAI_API_KEY:**",
+        "configurada" if st.secrets.get("OPENAI_API_KEY") else "não configurada",
+    )
     st.write("**OPENAI_MODEL:**", modelo_configurado)
+    st.write("**OpenAI Python SDK:**", sdk_version)
+    st.write("**Endpoint:** Responses API - `client.responses.create`")
+    st.write("**OPENAI_ORG_ID:** não utilizado")
 
     st.info(
         "A API key completa não é exibida por segurança. "
-        "Se ocorrer billing_not_active, copie o x-request-id exibido no erro e envie ao suporte da OpenAI."
+        "Esta versão não envia override de organização. "
+        "Se ocorrer billing_not_active, copie o x-request-id e o timestamp exibidos no erro."
     )
 
 prompt_usuario = st.text_area(
@@ -192,6 +215,8 @@ Quando faltar informação, use marcadores como <<preencher>>.
 
         except Exception as erro:
             st.error("Erro inesperado ao chamar a OpenAI API.")
+            st.write(f"**Timestamp:** `{obter_timestamp_brasilia()}`")
+            st.write(f"**OpenAI Python SDK:** `{obter_versao_openai_sdk()}`")
             st.code(str(erro))
             st.stop()
 
