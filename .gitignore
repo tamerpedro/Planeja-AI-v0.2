@@ -1,0 +1,12 @@
+.streamlit/secrets.toml
+.env
+*.log
+__pycache__/
+*.pyc
+uploads/
+temp/
+data/
+*.pdf
+*.docx
+*.xlsx
+*.csv
