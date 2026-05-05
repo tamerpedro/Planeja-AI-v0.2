@@ -11,7 +11,9 @@ st.set_page_config(
 )
 
 st.title("Planeja IA - Gerador inicial de DOD")
-st.caption("Protótipo v0.2 simplificado: contexto do repositório + prompt do usuário + OpenAI API.")
+st.caption(
+    "Protótipo v0.2 simplificado: contexto do repositório + prompt do usuário + OpenAI API."
+)
 
 
 def carregar_contexto() -> str:
@@ -23,20 +25,99 @@ def carregar_contexto() -> str:
     return caminho_contexto.read_text(encoding="utf-8")
 
 
-def obter_cliente_openai() -> OpenAI:
-    api_key = st.secrets.get("OPENAI_API_KEY")
+def obter_secret_texto(nome: str, obrigatorio: bool = False) -> str:
+    valor = st.secrets.get(nome, "")
 
-    if not api_key:
-        st.error("OPENAI_API_KEY não configurada nos Secrets do Streamlit Cloud.")
+    if valor is None:
+        valor = ""
+
+    valor = str(valor).strip()
+
+    if obrigatorio and not valor:
+        st.error(f"{nome} não configurada nos Secrets do Streamlit Cloud.")
         st.stop()
 
-    return OpenAI(api_key=api_key)
+    return valor
+
+
+def obter_cliente_openai() -> OpenAI:
+    api_key = obter_secret_texto("OPENAI_API_KEY", obrigatorio=True)
+    org_id = obter_secret_texto("OPENAI_ORG_ID", obrigatorio=False)
+
+    client_kwargs = {
+        "api_key": api_key,
+    }
+
+    if org_id:
+        client_kwargs["organization"] = org_id
+
+    return OpenAI(**client_kwargs)
+
+
+def obter_modelo() -> str:
+    return obter_secret_texto("OPENAI_MODEL", obrigatorio=False) or "gpt-5.4-mini"
+
+
+def extrair_request_id(erro: Exception) -> str:
+    request_id = getattr(erro, "request_id", None)
+
+    if request_id:
+        return str(request_id)
+
+    response = getattr(erro, "response", None)
+
+    if response is not None:
+        try:
+            return response.headers.get("x-request-id", "")
+        except Exception:
+            return ""
+
+    return ""
+
+
+def mostrar_erro_openai(titulo: str, erro: Exception) -> None:
+    request_id = extrair_request_id(erro)
+    status_code = getattr(erro, "status_code", None)
+
+    st.error(titulo)
+
+    if status_code:
+        st.write(f"**Status code:** {status_code}")
+
+    if request_id:
+        st.write(f"**x-request-id:** `{request_id}`")
+
+    st.write("**Detalhes do erro:**")
+    st.code(str(erro))
+
+    if "billing_not_active" in str(erro) or "Your account is not active" in str(erro):
+        st.warning(
+            "A OpenAI API retornou billing_not_active. "
+            "Isso geralmente indica que a organização usada na chamada ainda está marcada como inativa "
+            "ou que há divergência entre a organização da API key e a organização com billing ativo. "
+            "Confirme se OPENAI_ORG_ID está configurado com o Org ID correto em Secrets."
+        )
+
+    st.stop()
 
 
 contexto = carregar_contexto()
 
 with st.expander("Ver contexto carregado do repositório"):
     st.markdown(contexto if contexto else "Nenhum contexto encontrado.")
+
+with st.expander("Diagnóstico da configuração da OpenAI"):
+    org_id_configurado = obter_secret_texto("OPENAI_ORG_ID", obrigatorio=False)
+    modelo_configurado = obter_modelo()
+
+    st.write("**OPENAI_API_KEY:**", "configurada" if st.secrets.get("OPENAI_API_KEY") else "não configurada")
+    st.write("**OPENAI_ORG_ID:**", org_id_configurado if org_id_configurado else "não configurada")
+    st.write("**OPENAI_MODEL:**", modelo_configurado)
+
+    st.info(
+        "A API key completa não é exibida por segurança. "
+        "Se ocorrer billing_not_active, copie o x-request-id exibido no erro e envie ao suporte da OpenAI."
+    )
 
 prompt_usuario = st.text_area(
     "Informe a demanda ou solicite a geração do DOD:",
@@ -55,6 +136,7 @@ if gerar:
         st.stop()
 
     client = obter_cliente_openai()
+    modelo = obter_modelo()
 
     prompt_final = f"""
 Você é um assistente especializado em apoio à elaboração de Documento de Oficialização da Demanda.
@@ -76,8 +158,6 @@ Quando faltar informação, use marcadores como <<preencher>>.
 
     with st.spinner("Gerando resposta..."):
         try:
-            modelo = st.secrets.get("OPENAI_MODEL", "gpt-5.4-mini")
-
             resposta = client.responses.create(
                 model=modelo,
                 input=prompt_final,
@@ -87,24 +167,28 @@ Quando faltar informação, use marcadores como <<preencher>>.
             texto_resposta = resposta.output_text
 
         except RateLimitError as erro:
-            st.error("Erro de limite/quota na OpenAI API.")
-            st.code(str(erro))
-            st.stop()
+            mostrar_erro_openai(
+                "Erro 429 retornado pela OpenAI API. Pode ser limite de uso, quota ou billing_not_active.",
+                erro,
+            )
 
         except AuthenticationError as erro:
-            st.error("Erro de autenticação. Verifique a OPENAI_API_KEY nos Secrets do Streamlit.")
-            st.code(str(erro))
-            st.stop()
+            mostrar_erro_openai(
+                "Erro de autenticação. Verifique a OPENAI_API_KEY nos Secrets do Streamlit.",
+                erro,
+            )
 
         except BadRequestError as erro:
-            st.error("Requisição inválida. Verifique se o modelo configurado existe e está disponível.")
-            st.code(str(erro))
-            st.stop()
+            mostrar_erro_openai(
+                "Requisição inválida. Verifique se o modelo configurado existe e está disponível para sua conta.",
+                erro,
+            )
 
         except APIStatusError as erro:
-            st.error("Erro retornado pela OpenAI API.")
-            st.code(str(erro))
-            st.stop()
+            mostrar_erro_openai(
+                "Erro retornado pela OpenAI API.",
+                erro,
+            )
 
         except Exception as erro:
             st.error("Erro inesperado ao chamar a OpenAI API.")
