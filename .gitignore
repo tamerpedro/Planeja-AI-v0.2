@@ -10,3 +10,6 @@ data/
 *.docx
 *.xlsx
 *.csv
+base_institucional/**/*
+!base_institucional/**/
+!base_institucional/**/.gitkeep
