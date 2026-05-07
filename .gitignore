@@ -10,6 +10,8 @@ data/
 *.docx
 *.xlsx
 *.csv
-base_institucional/**/*
-!base_institucional/**/
-!base_institucional/**/.gitkeep
+!base_institucional/**/*.pdf
+!base_institucional/**/*.docx
+!base_institucional/**/*.xlsx
+!base_institucional/**/*.csv
+base_institucional/indice_contexto.json
