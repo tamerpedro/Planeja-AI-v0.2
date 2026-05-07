@@ -9,7 +9,7 @@ import streamlit as st
 from openai import APIStatusError, AuthenticationError, BadRequestError, OpenAI, RateLimitError
 
 
-st.set_page_config(page_title="Planeja IA - DOD v0.3", page_icon="D", layout="wide")
+st.set_page_config(page_title="Planeja IA - DOD v0.4", page_icon="D", layout="wide")
 st.title("Planeja IA - Minuta de DOD")
 st.caption("Assistente para estruturar minutas de Documento de Oficializacao de Demanda da Dataprev.")
 
@@ -23,37 +23,44 @@ MOTIVOS = [
 ]
 
 EIXOS = [
-    "NEGOCIOS E DEMANDAS ESTRATEGICAS",
-    "TECNOLOGIA",
-    "SEGURANCA E PROTECAO DE DADOS",
+    "PRODUTOS E SOLUCOES",
+    "GESTAO TECNOLOGICA, ANALYTICS E IA",
+    "SEGURANCA E RESILIENCIA",
     "GESTAO E GOVERNANCA",
     "PESSOAS",
 ]
 
 DIRETRIZES_PDTIC = [
-    "1. Garantir que a infraestrutura de TIC esteja alinhada as prioridades e metas estabelecidas pelo novo governo.",
-    "2. Implementar solucoes tecnologicas inovadoras para atender as novas demandas.",
-    "3. Aumentar a eficiencia operacional.",
-    "4. Assegurar a protecao dos dados e informacoes estrategicas.",
-    "5. Construir estrutura flexivel e agil para responder rapidamente aos desafios.",
-    "6. Promover a inclusao digital e reduzir a exclusao digital no pais.",
+    "D1. Conceber solucoes buscando promover a independencia tecnologica em relacao a fornecedores.",
+    "D2. Atualizar, disponibilizar e adequar a infraestrutura de TI as necessidades do negocio.",
+    "D3. Entregar solucoes tecnologicas seguras, usando melhores praticas de mercado.",
+    "D4. Entregar solucoes com padroes e protocolos amplamente utilizados no mercado.",
+    "D5. Entregar solucoes tecnologicas modernas e inovadoras, baseadas em dados.",
+    "D6. Realizar, quando oportuno, parcerias estrategicas com fornecedores de tecnologia.",
+    "D7. Adquirir solucoes tecnologicas de uso corporativo seguindo padroes de mercado.",
+    "D8. Prospectar solucoes inovadoras considerando oportunidades, riscos tecnologicos e seguranca.",
+    "D9. Promover fortalecimento do corpo funcional.",
+    "D10. Priorizar o uso da automacao nos processos.",
+    "D11. Promover ambiente digital de trabalho colaborativo, eficiente e seguro.",
+    "D12. Promover contratacoes de solucoes tecnologicas a longo prazo.",
+    "D13. Contratar solucoes prevendo capacidade de crescimento futuro.",
+    "D14. Fomentar cultura orientada a dados em todos os niveis da organizacao.",
 ]
 
 PILARES_PDTIC = [
-    "Inovacao",
-    "Inteligencia Artificial",
-    "Analytics",
-    "Experiencia do Cliente",
-    "Multinuvem Soberana",
+    "Manutencao e Expansao",
+    "Aprimoramento da Gestao da Continuidade de Negocios",
+    "Consolidacao da Gestao de Servicos de TI",
     "Modernizacao",
-    "Desenvolvimento de Software",
-    "Governanca de Dados",
-    "Modernizacao Continua",
-    "Metodos e Melhores Praticas",
-    "Tecnologias de Infraestrutura",
-    "Eficiencia TI Corporativa",
-    "Manutencao",
-    "Data Center",
+    "Adocao de novas tecnologias de desenvolvimento",
+    "Consolidacao da Modernizacao Continua",
+    "Implementacao de Hiperautomacao e integradores",
+    "Inovacao continua adotando IA para modelos avancados",
+    "Evolucao e Inovacao",
+    "Implementacao de Solucoes em Multinuvem de Governo",
+    "Ampliacao dos processos de Inteligencia Analitica",
+    "Consolidacao da Infraestrutura Publica Digital",
+    "Fortalecimento da Infraestrutura Nacional de Dados",
 ]
 
 SERVICOS = ["Orientacao Tecnica", "Capacitacao Tecnica", "Suporte Tecnico"]
@@ -117,7 +124,7 @@ def obter_cliente_openai() -> OpenAI:
 
 
 def obter_modelo() -> str:
-    return obter_secret_texto("OPENAI_MODEL") or "gpt-5.4-mini"
+    return obter_secret_texto("OPENAI_MODEL") or "gpt-5.5"
 
 
 def obter_versao_openai_sdk() -> str:
@@ -165,6 +172,23 @@ def limitar_texto(texto: str, limite: int = 12000) -> str:
 def extrair_texto_anexo(arquivo) -> str:
     nome = arquivo.name.lower()
     try:
+        if nome.endswith((".xlsx", ".xls")):
+            planilhas = []
+            folhas = st.session_state.get("_limite_folhas_planilha", 10)
+            linhas = st.session_state.get("_limite_linhas_planilha", 80)
+            workbook = __import__("pandas").read_excel(
+                io.BytesIO(arquivo.getvalue()),
+                sheet_name=None,
+                nrows=linhas,
+            )
+            for nome_folha, dados in list(workbook.items())[:folhas]:
+                planilhas.append(f"### Planilha: {nome_folha}\n{dados.to_markdown(index=False)}")
+            return "\n\n".join(planilhas)
+
+        if nome.endswith(".csv"):
+            dados = __import__("pandas").read_csv(io.BytesIO(arquivo.getvalue()), nrows=300)
+            return dados.to_markdown(index=False)
+
         if nome.endswith(".pdf"):
             from pypdf import PdfReader
 
@@ -228,6 +252,13 @@ Regras:
 - Remova orientacoes internas do modelo. A saida deve ser a minuta, nao instrucoes.
 - Mantenha titulos e numeracao do DOD.
 - Use "(X)" nas opcoes selecionadas e "( )" nas opcoes nao selecionadas.
+- No item 2, apresente todos os eixos, diretrizes e pilares informados pelo usuario, preferencialmente em tabela.
+- No item 3.2, preserve tabelas de lote, unidade, endereco, item, quantidade e garantia quando esses dados existirem no input ou anexos.
+- No item 3.3.1, mostre todas as opcoes oficiais de motivacao, marcando apenas as selecionadas.
+- No item 3.3.2, quando houver varios riscos, organize em categorias como riscos operacionais, tecnologicos, de gestao e institucionais.
+- No item 3.3.3, desenvolva cada resultado esperado em paragrafo curto, e nao apenas em lista, quando houver informacao suficiente.
+- No item 3.6, se houver quantitativo por unidade ou planilha anexa, consolide uma tabela por unidade e uma tabela de quantitativo total.
+- No item 7, liste todos os anexos usados e descreva como cada um foi considerado.
 
 Estrutura oficial:
 {ESTRUTURA_DOD}
@@ -252,6 +283,19 @@ with st.sidebar:
     st.write("**OPENAI_MODEL:**", obter_modelo())
     st.write("**OpenAI Python SDK:**", obter_versao_openai_sdk())
     st.write("**OPENAI_ORG_ID:** nao utilizado")
+    st.session_state["_limite_folhas_planilha"] = st.number_input(
+        "Folhas por planilha",
+        min_value=1,
+        max_value=50,
+        value=10,
+    )
+    st.session_state["_limite_linhas_planilha"] = st.number_input(
+        "Linhas por folha",
+        min_value=20,
+        max_value=1000,
+        value=80,
+        step=20,
+    )
     with st.expander("Contexto do repositorio"):
         st.markdown(contexto_repo or "Nenhum contexto encontrado.")
 
@@ -318,7 +362,11 @@ clientes_externos = campo_texto("4.2 Clientes externos beneficiados ou usuarios 
 st.subheader("5. Informacoes adicionais, notas e anexos")
 informacoes_adicionais = campo_texto("5. Informacoes adicionais", "informacoes_adicionais")
 notas = campo_texto("6. Notas explicativas ou referencias", "notas")
-arquivos = st.file_uploader("7. Anexos de contexto", accept_multiple_files=True, type=["pdf", "txt", "md", "csv", "json", "docx"])
+arquivos = st.file_uploader(
+    "7. Anexos de contexto",
+    accept_multiple_files=True,
+    help="Aceita qualquer extensao. O app extrai texto de PDF, DOCX, planilhas, CSV, TXT, MD e JSON; outros formatos entram como anexo descrito pelo usuario.",
+)
 anexos_contexto = montar_anexos_contexto(arquivos)
 
 dados_dod = {
