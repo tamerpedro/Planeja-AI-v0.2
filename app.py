@@ -86,8 +86,14 @@ CATEGORIAS_BIBLIOTECA = {
     "Referencia tecnica": ("referencias_tecnicas", 5),
 }
 
+PASTA_PARA_CATEGORIA = {
+    pasta: tipo
+    for tipo, (pasta, _prioridade) in CATEGORIAS_BIBLIOTECA.items()
+}
+
 BASE_INSTITUCIONAL = Path("base_institucional")
 INDICE_INSTITUCIONAL = BASE_INSTITUCIONAL / "indice_contexto.json"
+ARQUIVOS_IGNORADOS_BIBLIOTECA = {".gitkeep", "indice_contexto.json"}
 
 ESTRUTURA_DOD = """
 Documento de Oficializacao de Demanda
@@ -197,6 +203,20 @@ def normalizar_nome_arquivo(nome: str) -> str:
     nome_limpo = Path(nome).name
     nome_limpo = re.sub(r"[^A-Za-z0-9._ -]+", "_", nome_limpo).strip()
     return nome_limpo or "documento"
+
+
+def obter_nome_arquivo(arquivo) -> str:
+    return getattr(arquivo, "name", Path(str(arquivo)).name)
+
+
+def obter_bytes_arquivo(arquivo) -> bytes:
+    if isinstance(arquivo, Path):
+        return arquivo.read_bytes()
+
+    if isinstance(arquivo, str):
+        return Path(arquivo).read_bytes()
+
+    return arquivo.getvalue()
 
 
 def carregar_indice_institucional() -> list[dict]:
@@ -363,11 +383,13 @@ def indexar_documentos_institucionais(
     novos_itens = []
 
     for arquivo in arquivos:
-        conteudo_bytes = arquivo.getvalue()
-        nome = normalizar_nome_arquivo(arquivo.name)
+        conteudo_bytes = obter_bytes_arquivo(arquivo)
+        nome = normalizar_nome_arquivo(obter_nome_arquivo(arquivo))
         hash_documento = hashlib.sha256(conteudo_bytes).hexdigest()
         caminho = BASE_INSTITUCIONAL / pasta / nome
-        caminho.write_bytes(conteudo_bytes)
+
+        if not isinstance(arquivo, Path) or caminho.resolve() != arquivo.resolve():
+            caminho.write_bytes(conteudo_bytes)
 
         texto = extrair_texto_anexo(arquivo)
         trechos = dividir_em_trechos(texto)
@@ -403,15 +425,59 @@ def indexar_documentos_institucionais(
     return len(novos_itens)
 
 
+def listar_documentos_do_repositorio() -> list[tuple[Path, str]]:
+    preparar_biblioteca_institucional()
+    documentos = []
+
+    for pasta, tipo_documental in PASTA_PARA_CATEGORIA.items():
+        diretorio = BASE_INSTITUCIONAL / pasta
+        if not diretorio.exists():
+            continue
+
+        for caminho in diretorio.rglob("*"):
+            if not caminho.is_file():
+                continue
+
+            if caminho.name in ARQUIVOS_IGNORADOS_BIBLIOTECA:
+                continue
+
+            documentos.append((caminho, tipo_documental))
+
+    return documentos
+
+
+def reindexar_biblioteca_do_repositorio(client: OpenAI) -> tuple[int, int]:
+    documentos = listar_documentos_do_repositorio()
+    indice = []
+    total_trechos = 0
+
+    salvar_indice_institucional([])
+
+    for caminho, tipo_documental in documentos:
+        assunto = caminho.stem.replace("_", " ").replace("-", " ").strip()
+        total_trechos += indexar_documentos_institucionais(
+            client,
+            [caminho],
+            tipo_documental,
+            assunto,
+            "",
+            "",
+            "Uso interno autorizado",
+        )
+        indice = carregar_indice_institucional()
+
+    return len(documentos), len(indice) if indice else total_trechos
+
+
 def extrair_texto_anexo(arquivo) -> str:
-    nome = arquivo.name.lower()
+    nome = obter_nome_arquivo(arquivo).lower()
     try:
         if nome.endswith((".xlsx", ".xls")):
             planilhas = []
             folhas = st.session_state.get("_limite_folhas_planilha", 10)
             linhas = st.session_state.get("_limite_linhas_planilha", 80)
             workbook = __import__("pandas").read_excel(
-                io.BytesIO(arquivo.getvalue()),
+                io.BytesIO(obter_bytes_arquivo(arquivo)),
                 sheet_name=None,
                 nrows=linhas,
             )
@@ -420,19 +486,19 @@ def extrair_texto_anexo(arquivo) -> str:
             return "\n\n".join(planilhas)
 
         if nome.endswith(".csv"):
-            dados = __import__("pandas").read_csv(io.BytesIO(arquivo.getvalue()), nrows=300)
+            dados = __import__("pandas").read_csv(io.BytesIO(obter_bytes_arquivo(arquivo)), nrows=300)
             return dados.to_markdown(index=False)
 
         if nome.endswith(".pdf"):
             from pypdf import PdfReader
 
-            leitor = PdfReader(io.BytesIO(arquivo.getvalue()))
+            leitor = PdfReader(io.BytesIO(obter_bytes_arquivo(arquivo)))
             return "\n\n".join(p.extract_text() or "" for p in leitor.pages)
 
         if nome.endswith(".docx"):
             from docx import Document
 
-            documento = Document(io.BytesIO(arquivo.getvalue()))
+            documento = Document(io.BytesIO(obter_bytes_arquivo(arquivo)))
             paragrafos = [p.text for p in documento.paragraphs]
             tabelas = [
                 " | ".join(c.text.strip() for c in linha.cells)
@@ -441,7 +507,7 @@ def extrair_texto_anexo(arquivo) -> str:
             ]
             return "\n".join(paragrafos + tabelas)
 
-        return arquivo.getvalue().decode("utf-8")
+        return obter_bytes_arquivo(arquivo).decode("utf-8")
     except UnicodeDecodeError:
         return "[Arquivo binario sem extracao automatica. Descreva o conteudo no campo de observacoes.]"
     except Exception as erro:
@@ -547,6 +613,21 @@ with st.sidebar:
         documentos_indexados = {item.get("hash_documento") for item in indice_atual}
         st.write(f"**Documentos indexados:** {len(documentos_indexados)}")
         st.write(f"**Trechos indexados:** {len(indice_atual)}")
+        documentos_repositorio = listar_documentos_do_repositorio()
+        st.write(f"**Documentos no repositorio:** {len(documentos_repositorio)}")
+
+        if st.button("Reindexar biblioteca do repositorio", key="reindexar_biblioteca_repositorio"):
+            with st.spinner("Reindexando documentos do repositorio..."):
+                try:
+                    total_documentos, total_trechos = reindexar_biblioteca_do_repositorio(
+                        obter_cliente_openai()
+                    )
+                    st.success(
+                        f"{total_documentos} documentos processados; {total_trechos} trechos indexados."
+                    )
+                except Exception as erro:
+                    st.error("Nao foi possivel reindexar a biblioteca do repositorio.")
+                    st.code(str(erro))
 
         arquivos_biblioteca = st.file_uploader(
             "Adicionar documentos autorizados",
