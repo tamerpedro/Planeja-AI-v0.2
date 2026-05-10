@@ -12,9 +12,9 @@ import streamlit as st
 from openai import APIStatusError, AuthenticationError, BadRequestError, OpenAI, RateLimitError
 
 
-st.set_page_config(page_title="Planeja IA - DOD v0.4", page_icon="D", layout="wide")
-st.title("Planeja IA - Minuta de DOD")
-st.caption("Assistente para estruturar minutas de Documento de Oficializacao de Demanda da Dataprev.")
+st.set_page_config(page_title="Planeja IA - DOD e ET v0.3", page_icon="D", layout="wide")
+st.title("Planeja IA - Minutas de DOD e Estudo Tecnico")
+st.caption("Assistente para estruturar minutas de Documento de Oficializacao de Demanda e Estudo Tecnico da Dataprev.")
 
 MOTIVOS = [
     "Termino do contrato vigente",
@@ -94,6 +94,21 @@ PASTA_PARA_CATEGORIA = {
 BASE_INSTITUCIONAL = Path("base_institucional")
 INDICE_INSTITUCIONAL = BASE_INSTITUCIONAL / "indice_contexto.json"
 ARQUIVOS_IGNORADOS_BIBLIOTECA = {".gitkeep", "indice_contexto.json"}
+
+
+
+ESTRUTURA_ESTUDO_TECNICO = """
+Estudo Tecnico Preliminar
+1. Necessidade da contratacao
+2. Alinhamento estrategico e institucional
+3. Requisitos da solucao
+4. Solucoes avaliadas e analise comparativa
+5. Estrategia de atendimento da necessidade
+6. Estimativas preliminares de quantitativos e custos
+7. Riscos, mitigacoes e dependencias
+8. Resultados esperados
+9. Premissas, restricoes e anexos
+"""
 
 ESTRUTURA_DOD = """
 Documento de Oficializacao de Demanda
@@ -531,6 +546,38 @@ def montar_anexos_contexto(arquivos) -> list[dict[str, str]]:
     return anexos
 
 
+def montar_prompt_estudo_tecnico(dod_final: str, contexto: str, contexto_institucional: str, nome_artefato: str) -> str:
+    return f"""
+Voce e um assistente especializado na elaboracao de minuta de Estudo Tecnico Preliminar para a Dataprev.
+
+Objetivo: gerar uma minuta completa e rastreavel com base no DOD final enviado pelo usuario.
+
+Regras:
+- Use o DOD final como fonte primaria de fatos.
+- Use o contexto institucional apenas para padrao de linguagem, estrutura e conformidade.
+- Nao invente dados, quantitativos, prazos, custos, areas, fornecedores ou requisitos nao informados.
+- Quando faltar informacao obrigatoria, use <<preencher>>.
+- Organize a resposta em Markdown com titulos numerados conforme a estrutura oficial.
+- Inclua tabela de rastreabilidade relacionando secoes do ET aos trechos do DOD final.
+
+Estrutura sugerida do Estudo Tecnico:
+{ESTRUTURA_ESTUDO_TECNICO}
+
+Nome do arquivo DOD final: {nome_artefato}
+
+DOD final (texto extraido):
+{dod_final}
+
+Contexto do repositorio:
+{contexto or "Nenhum contexto adicional no repositorio."}
+
+Biblioteca institucional recuperada:
+{contexto_institucional}
+
+Saida esperada: gere apenas a minuta do Estudo Tecnico em Markdown.
+"""
+
+
 def montar_prompt(dados: dict, contexto: str, anexos: list[dict[str, str]], contexto_institucional: str) -> str:
     return f"""
 Voce e um assistente especializado na elaboracao de minutas de Documento de Oficializacao de Demanda (DOD) para a Dataprev.
@@ -852,3 +899,57 @@ if st.button("Gerar minuta de DOD", type="primary"):
 
     st.markdown(texto_resposta)
     st.download_button("Baixar minuta em Markdown", data=texto_resposta, file_name="minuta_dod.md", mime="text/markdown")
+    st.session_state["minuta_dod_gerada"] = texto_resposta
+
+st.divider()
+st.subheader("Etapa 2: Upload do DOD final e geracao da minuta de Estudo Tecnico")
+dod_final_upload = st.file_uploader(
+    "Anexe o DOD final (PDF, DOCX ou TXT)",
+    type=["pdf", "docx", "txt", "md"],
+    key="dod_final_upload",
+)
+
+if dod_final_upload is not None:
+    texto_dod_final = limitar_texto(extrair_texto_anexo(dod_final_upload), 30000)
+    st.caption(f"Arquivo recebido: {dod_final_upload.name} | Texto extraido: {len(texto_dod_final)} caracteres")
+
+    if st.button("Gerar minuta de Estudo Tecnico", type="primary"):
+        with st.spinner("Gerando minuta de Estudo Tecnico..."):
+            try:
+                client = obter_cliente_openai()
+                base_dados_et = {
+                    "titulo_dod": titulo_dod,
+                    "nome_projeto": nome_projeto,
+                    "unidade_demandante": unidade_demandante,
+                    "contexto_negocio": contexto_negocio,
+                    "escopo_demanda": escopo_demanda,
+                    "riscos": riscos,
+                    "resultados": resultados,
+                }
+                anexos_et = [{"arquivo": dod_final_upload.name, "descricao": "DOD final oficial", "conteudo_extraido": texto_dod_final}]
+                trechos_et = buscar_contexto_institucional(client, base_dados_et, anexos_et)
+                contexto_et = formatar_contexto_institucional(trechos_et)
+                resposta_et = client.responses.create(
+                    model=obter_modelo(),
+                    input=montar_prompt_estudo_tecnico(
+                        texto_dod_final,
+                        contexto_repo,
+                        contexto_et,
+                        dod_final_upload.name,
+                    ),
+                    max_output_tokens=5000,
+                )
+                minuta_et = resposta_et.output_text
+            except Exception as erro:
+                st.error("Erro ao gerar minuta de Estudo Tecnico.")
+                st.code(str(erro))
+                st.stop()
+
+        st.subheader("Minuta de Estudo Tecnico gerada")
+        st.markdown(minuta_et)
+        st.download_button(
+            "Baixar minuta de Estudo Tecnico",
+            data=minuta_et,
+            file_name="minuta_estudo_tecnico.md",
+            mime="text/markdown",
+        )
